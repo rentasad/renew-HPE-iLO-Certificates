@@ -1,0 +1,5 @@
+# Enthält Passwörter — niemals einchecken
+config.env
+
+# Logs
+*.log
