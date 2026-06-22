@@ -112,6 +112,27 @@ print(f'{days}|{exp}|{issuer}')
   return 1  # Kein Renewal nötig
 }
 
+# Hilfsfunktion: Action-URLs aus der API lesen (iLO 4 = HpHttpsCert, iLO 5/6 = HpeHttpsCert)
+get_ilo_action_urls() {
+  local host=$1
+  curl -k -s --connect-timeout 10 \
+    -u "$ILO_USER:$ILO_PASS" \
+    "https://$host/redfish/v1/Managers/1/SecurityService/HttpsCert/" \
+    | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+actions = d.get('Actions', {})
+gencsr = ''
+importcert = ''
+for key, val in actions.items():
+    if 'GenerateCSR' in key:
+        gencsr = val.get('target', '')
+    if 'ImportCertificate' in key:
+        importcert = val.get('target', '')
+print(f'{gencsr}|{importcert}')
+" 2>/dev/null || echo "|"
+}
+
 # Hilfsfunktion: CSR von iLO abrufen, CN zurückgeben
 get_current_csr_cn() {
   local host=$1
@@ -143,6 +164,17 @@ generate_csr() {
   local cn=$2
   local csr_file=$3
 
+  # Action-URLs dynamisch lesen (kompatibel mit iLO 4, 5, 6)
+  local action_urls
+  action_urls=$(get_ilo_action_urls "$host")
+  local gencsr_url="https://$host${action_urls%%|*}"
+  local importcert_url="https://$host${action_urls##*|}"
+
+  if [[ -z "${action_urls%%|*}" ]]; then
+    log "FEHLER: GenerateCSR Action-URL nicht gefunden für $host"
+    return 1
+  fi
+
   # Vorhandenen CSR prüfen — neugenerieren nur wenn CN nicht passt
   local existing_cn
   existing_cn=$(get_current_csr_cn "$host")
@@ -150,7 +182,7 @@ generate_csr() {
   if [[ "$existing_cn" == "$cn" ]]; then
     log "  Vorhandener CSR passt bereits (CN=$cn) — überspringe Neugenerierung."
   else
-    log "  Generiere neuen CSR auf $host (CN=$cn)..."
+    log "  Generiere neuen CSR auf $host (CN=$cn) via $gencsr_url ..."
     curl -k -s -X POST \
       --connect-timeout 10 \
       -u "$ILO_USER:$ILO_PASS" \
@@ -163,7 +195,7 @@ generate_csr() {
         \"State\": \"${ILO_STATE:-Sachsen}\",
         \"Country\": \"${ILO_COUNTRY:-DE}\"
       }" \
-      "https://$host/redfish/v1/Managers/1/SecurityService/HttpsCert/Actions/HpeHttpsCert.GenerateCSR/" > /dev/null
+      "$gencsr_url" > /dev/null
 
     # Polling bis CSR bereit (max. 30 Sekunden)
     log "  Warte auf CSR-Generierung..."
@@ -239,6 +271,11 @@ import_cert() {
   local host=$1
   local cert_file=$2
 
+  # Action-URL dynamisch lesen (kompatibel mit iLO 4, 5, 6)
+  local action_urls
+  action_urls=$(get_ilo_action_urls "$host")
+  local importcert_url="https://$host${action_urls##*|}"
+
   local cert_json
   cert_json=$(awk '{printf "%s\\n", $0}' "$cert_file")
 
@@ -252,7 +289,7 @@ import_cert() {
     -u "$ILO_USER:$ILO_PASS" \
     -H "Content-Type: application/json" \
     -d "{\"Certificate\": \"$cert_json\"}" \
-    "https://$host/redfish/v1/Managers/1/SecurityService/HttpsCert/Actions/HpeHttpsCert.ImportCertificate/")
+    "$importcert_url")
 
   if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
     log "  OK [$http_code]: Zertifikat importiert. iLO startet Webservice neu (~30s)."
