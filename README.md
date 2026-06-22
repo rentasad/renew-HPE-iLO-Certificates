@@ -28,7 +28,7 @@ The private key never leaves the iLO — more secure than importing a shared wil
 - [acme.sh](https://github.com/acmesh-official/acme.sh) installed
 - A DNS provider supported by acme.sh ([full list](https://github.com/acmesh-official/acme.sh/wiki/dnsapi))
 - DNS record pointing to your iLO (e.g. `ilo-server1.example.com`)
-- A local user account in iLO (User Administration → Service)
+- A dedicated service account in iLO with minimal permissions (see below)
 
 ### Setup
 
@@ -62,9 +62,27 @@ Key settings in `config.env`:
 
 #### 3. Prepare iLO
 
-- Set the iLO hostname: **Network → iLO Dedicated Network Port → General → iLO Subsystem Name**  
-  The hostname must match the DNS record (e.g. `ilo-server1` with domain `example.com` → FQDN `ilo-server1.example.com`)
-- Create a service account in iLO: **User Administration → New**
+**Set the iLO hostname:**  
+Network → iLO Dedicated Network Port → General → iLO Subsystem Name  
+The hostname must match the DNS record (e.g. `ilo-server1` with domain `example.com` → FQDN `ilo-server1.example.com`)
+
+**Create a dedicated service account with minimal permissions:**  
+User Administration → New → Role: Custom
+
+| Privilege | Required |
+|---|---|
+| Login | ✅ Yes |
+| Configure iLO Settings | ✅ Yes |
+| Remote Console | ❌ No |
+| Virtual Power and Reset | ❌ No |
+| Virtual Media | ❌ No |
+| Host BIOS | ❌ No |
+| Administer User Accounts | ❌ No |
+| Host NIC | ❌ No |
+| Host Storage | ❌ No |
+| Recovery Set | ❌ No |
+
+Enable **Service Account** checkbox. These two privileges are sufficient for `GenerateCSR` and `ImportCertificate` via the Redfish API.
 
 #### 4. Run
 
@@ -141,7 +159,7 @@ Der private Schlüssel verlässt dabei nie die iLO.
 - [acme.sh](https://github.com/acmesh-official/acme.sh) installiert
 - Ein von acme.sh unterstützter DNS-Provider ([vollständige Liste](https://github.com/acmesh-official/acme.sh/wiki/dnsapi))
 - DNS-Eintrag für die iLO (z.B. `ilo-server1.example.com`)
-- Service-Account in iLO (User Administration → Service)
+- Dedizierter Service-Account in iLO mit minimalen Berechtigungen (siehe unten)
 
 ### Setup
 
@@ -175,9 +193,27 @@ Wichtige Einstellungen in `config.env`:
 
 #### 3. iLO vorbereiten
 
-- iLO-Hostname setzen: **Network → iLO Dedicated Network Port → General → iLO Subsystem Name**  
-  Der Hostname muss dem DNS-Eintrag entsprechen (z.B. `ilo-server1` mit Domain `example.com` → FQDN `ilo-server1.example.com`)
-- Service-Account anlegen: **User Administration → New**
+**iLO-Hostname setzen:**  
+Network → iLO Dedicated Network Port → General → iLO Subsystem Name  
+Der Hostname muss dem DNS-Eintrag entsprechen (z.B. `ilo-server1` mit Domain `example.com` → FQDN `ilo-server1.example.com`)
+
+**Dedizierten Service-Account mit minimalen Berechtigungen anlegen:**  
+User Administration → New → Role: Custom
+
+| Berechtigung | Erforderlich |
+|---|---|
+| Login | ✅ Ja |
+| Configure iLO Settings | ✅ Ja |
+| Remote Console | ❌ Nein |
+| Virtual Power and Reset | ❌ Nein |
+| Virtual Media | ❌ Nein |
+| Host BIOS | ❌ Nein |
+| Administer User Accounts | ❌ Nein |
+| Host NIC | ❌ Nein |
+| Host Storage | ❌ Nein |
+| Recovery Set | ❌ Nein |
+
+**Service Account**-Checkbox aktivieren. Diese zwei Berechtigungen genügen für `GenerateCSR` und `ImportCertificate` via Redfish API.
 
 #### 4. Ausführen
 
