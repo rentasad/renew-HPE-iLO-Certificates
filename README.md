@@ -1,119 +1,232 @@
 # iloCertDeploy
 
-Automatisiertes SSL-Zertifikat-Renewal für **HPE iLO** via Let's Encrypt.
+> Automated SSL certificate renewal for HPE iLO via Let's Encrypt · Automatisiertes SSL-Zertifikat-Renewal für HPE iLO via Let's Encrypt
 
-## Funktionsprinzip
+---
 
-HPE iLO akzeptiert über die Redfish API keine externen Private Keys. Das Script nutzt daher den CSR-Workflow: iLO generiert selbst ein Key-Pair, der CSR wird von Let's Encrypt signiert, das Zertifikat zurückimportiert. Der private Schlüssel verlässt dabei nie die iLO.
+## 🇬🇧 English
+
+### What it does
+
+HPE iLO ships with a self-signed default certificate ("Default Issuer — Do not trust") which triggers a security warning in the iLO Security Dashboard. This project automates replacing it with a trusted Let's Encrypt certificate.
+
+Because iLO's Redfish API does not allow importing an external private key, the script uses the **CSR workflow**:
 
 ```
-iLO generiert Key-Pair + CSR
-  → acme.sh signiert CSR (DNS-01, Domain Offensive)
-    → Signiertes Cert wird via Redfish importiert
-      → iLO startet Webservice neu (~30s)
+iLO generates key pair + CSR
+  → acme.sh signs CSR (DNS-01, your DNS provider)
+    → Signed certificate is imported back into iLO via Redfish API
+      → iLO restarts its web service (~30s)
 ```
 
-## Infrastruktur
+The private key never leaves the iLO — more secure than importing a shared wildcard certificate.
 
-| Komponente | Host | Beschreibung |
-|---|---|---|
-| ilo-cert-renew.sh | docker-vw | Läuft als Cronjob |
-| acme.sh | docker-vw | ACME-Client für DNS-01 Challenge |
-| DNS | Domain Offensive | DNS-01 Challenge via API-Token |
-| iLO-Ziele | ilo-pveX.gustini-intern.de | HPE ProLiant Server im Verwaltungsnetz |
+### Requirements
 
-## Voraussetzungen
+- HPE ProLiant server with iLO 5 or iLO 6
+- Linux host with `curl`, `openssl`, `python3`
+- [acme.sh](https://github.com/acmesh-official/acme.sh) installed
+- A DNS provider supported by acme.sh ([full list](https://github.com/acmesh-official/acme.sh/wiki/dnsapi))
+- DNS record pointing to your iLO (e.g. `ilo-server1.example.com`)
+- A local user account in iLO (User Administration → Service)
 
-- `curl`, `openssl`, `python3` auf dem Host installiert
-- acme.sh installiert (siehe Setup)
-- DNS-Einträge für alle iLO-Hosts vorhanden
-- iLO-Hostname in iLO gesetzt (Network → iLO Hostname → z.B. `ilo-pve3`)
-- Service-Account `gustini` in iLO unter User Administration → Service
+### Setup
 
-## Setup
-
-### 1. acme.sh installieren
+#### 1. Install acme.sh
 
 ```bash
-curl https://get.acme.sh | sh -s email=admin@gustini.de
+curl https://get.acme.sh | sh -s email=admin@example.com
 source ~/.bashrc
 ```
 
-Der `-s email=...` Parameter ist zwingend erforderlich — ohne ihn schlägt die Installation fehl.
-acme.sh registriert damit gleichzeitig den Let's Encrypt Account.
-
-### 3. Config anlegen
+#### 2. Configure
 
 ```bash
 cp config.env.example config.env
 chmod 600 config.env
-nano config.env   # DO_LETOKEN, ILO_PASS und ILO_HOSTS eintragen
+nano config.env
 ```
 
-### 4. Script ausführbar machen
+Key settings in `config.env`:
+
+| Variable | Description |
+|---|---|
+| `ILO_HOSTS` | Space-separated list of iLO hostnames |
+| `ILO_USER` | iLO service account username |
+| `ILO_PASS` | iLO service account password |
+| `ACME_SH` | Path to acme.sh (default: `~/.acme.sh/acme.sh`) |
+| `DO_LETOKEN` | DNS provider API token (variable name depends on your provider) |
+| `RENEWAL_DAYS` | Renew if fewer than N days remaining (default: 30) |
+
+> **Note on DNS provider variable:** The variable name for your API token depends on your DNS provider's acme.sh plugin. Check the [acme.sh DNS API docs](https://github.com/acmesh-official/acme.sh/wiki/dnsapi) for the correct variable and plugin name (e.g. `dns_cf` for Cloudflare, `dns_doapi` for Domain Offensive).
+
+#### 3. Prepare iLO
+
+- Set the iLO hostname: **Network → iLO Dedicated Network Port → General → iLO Subsystem Name**  
+  The hostname must match the DNS record (e.g. `ilo-server1` with domain `example.com` → FQDN `ilo-server1.example.com`)
+- Create a service account in iLO: **User Administration → New**
+
+#### 4. Run
 
 ```bash
 chmod +x ilo-cert-renew.sh
-```
 
-### 5. DNS-Eintrag und iLO-Hostname setzen
-
-Für jeden Server:
-- DNS-Eintrag anlegen: `ilo-pveX.gustini-intern.de → <iLO-IP>`
-- In iLO: Network → iLO Dedicated Network Port → iLO Hostname → `ilo-pveX`
-
-### 6. Testlauf
-
-```bash
-# Nur prüfen, kein API-Aufruf
+# Dry run — checks only, no API calls
 ./ilo-cert-renew.sh --dry-run
 
-# Einzelnen Host testen (erzwingt Renewal)
-./ilo-cert-renew.sh --force ilo-pve3.gustini-intern.de
+# First run — force renewal regardless of expiry
+./ilo-cert-renew.sh --force
+
+# Single host
+./ilo-cert-renew.sh --force ilo-server1.example.com
 ```
 
-### 7. Cronjob einrichten
+#### 5. Schedule (monthly cron)
 
 ```bash
 crontab -e
 ```
-
 ```cron
-# iLO Zertifikate monatlich prüfen und bei Bedarf erneuern (LE = 90 Tage)
 0 3 1 * * /opt/iloCertDeploy/ilo-cert-renew.sh >> /var/log/ilo-cert-renew.log 2>&1
 ```
 
-## Verwendung
+### Adding a new server
+
+1. Create DNS record: `ilo-serverX.example.com → <iLO IP>`
+2. Set iLO hostname in iLO network settings
+3. Create service account in iLO
+4. Add hostname to `ILO_HOSTS` in `config.env`
+5. Run: `./ilo-cert-renew.sh --force ilo-serverX.example.com`
+
+### Usage
 
 ```bash
-# Alle Hosts — nur bei Bedarf (< RENEWAL_DAYS Restlaufzeit)
-./ilo-cert-renew.sh
+./ilo-cert-renew.sh                          # all hosts, only if renewal needed
+./ilo-cert-renew.sh --force                  # all hosts, always renew
+./ilo-cert-renew.sh --dry-run                # check only, no changes
+./ilo-cert-renew.sh ilo-server1.example.com  # single host
+./ilo-cert-renew.sh --force ilo-server1.example.com
+```
 
-# Alle Hosts — immer erneuern
+### Security notes
+
+- `config.env` contains credentials — it is excluded from git via `.gitignore`. **Never commit it.**
+- Each iLO gets its own certificate and key pair. The private key is generated on and stays on the iLO.
+- Let's Encrypt certificates expire after 90 days. The monthly cron job renews them automatically when fewer than `RENEWAL_DAYS` days remain.
+- On first run for a new server, the script detects the HPE default issuer and forces renewal automatically — no `--force` flag needed.
+
+---
+
+## 🇩🇪 Deutsch
+
+### Was es tut
+
+HPE iLO wird ab Werk mit einem selbstsignierten Zertifikat ausgeliefert ("Default Issuer — Do not trust"), das im iLO Security Dashboard als Risiko gemeldet wird. Dieses Projekt automatisiert den Austausch gegen ein vertrauenswürdiges Let's Encrypt Zertifikat.
+
+Da die Redfish API von iLO keinen Import eines externen Private Keys erlaubt, verwendet das Script den **CSR-Workflow**:
+
+```
+iLO generiert Key-Pair + CSR
+  → acme.sh signiert CSR (DNS-01, DNS-Provider)
+    → Signiertes Zertifikat wird via Redfish API in iLO importiert
+      → iLO startet Webservice neu (~30s)
+```
+
+Der private Schlüssel verlässt dabei nie die iLO.
+
+### Voraussetzungen
+
+- HPE ProLiant Server mit iLO 5 oder iLO 6
+- Linux-Host mit `curl`, `openssl`, `python3`
+- [acme.sh](https://github.com/acmesh-official/acme.sh) installiert
+- Ein von acme.sh unterstützter DNS-Provider ([vollständige Liste](https://github.com/acmesh-official/acme.sh/wiki/dnsapi))
+- DNS-Eintrag für die iLO (z.B. `ilo-server1.example.com`)
+- Service-Account in iLO (User Administration → Service)
+
+### Setup
+
+#### 1. acme.sh installieren
+
+```bash
+curl https://get.acme.sh | sh -s email=admin@example.com
+source ~/.bashrc
+```
+
+#### 2. Konfigurieren
+
+```bash
+cp config.env.example config.env
+chmod 600 config.env
+nano config.env
+```
+
+Wichtige Einstellungen in `config.env`:
+
+| Variable | Beschreibung |
+|---|---|
+| `ILO_HOSTS` | Leerzeichen-getrennte iLO-Hostnamen |
+| `ILO_USER` | iLO Service-Account Benutzername |
+| `ILO_PASS` | iLO Service-Account Passwort |
+| `ACME_SH` | Pfad zu acme.sh (Standard: `~/.acme.sh/acme.sh`) |
+| `DO_LETOKEN` | API-Token des DNS-Providers (Variablenname abhängig vom Provider) |
+| `RENEWAL_DAYS` | Renewal wenn weniger als N Tage Restlaufzeit (Standard: 30) |
+
+> **Hinweis zum DNS-Provider:** Variablenname und Plugin-Name hängen vom DNS-Provider ab. Für Domain Offensive z.B. `DO_LETOKEN` und Plugin `dns_doapi`. Siehe [acme.sh DNS API Dokumentation](https://github.com/acmesh-official/acme.sh/wiki/dnsapi).
+
+#### 3. iLO vorbereiten
+
+- iLO-Hostname setzen: **Network → iLO Dedicated Network Port → General → iLO Subsystem Name**  
+  Der Hostname muss dem DNS-Eintrag entsprechen (z.B. `ilo-server1` mit Domain `example.com` → FQDN `ilo-server1.example.com`)
+- Service-Account anlegen: **User Administration → New**
+
+#### 4. Ausführen
+
+```bash
+chmod +x ilo-cert-renew.sh
+
+# Dry-Run — nur prüfen, kein API-Aufruf
+./ilo-cert-renew.sh --dry-run
+
+# Erster Lauf — Renewal erzwingen
 ./ilo-cert-renew.sh --force
 
 # Einzelner Host
-./ilo-cert-renew.sh ilo-pve3.gustini-intern.de
-
-# Einzelner Host, immer erneuern
-./ilo-cert-renew.sh --force ilo-pve3.gustini-intern.de
-
-# Nur prüfen, nichts tun
-./ilo-cert-renew.sh --dry-run
+./ilo-cert-renew.sh --force ilo-server1.example.com
 ```
 
-## Neuen Server hinzufügen
+#### 5. Cronjob einrichten
 
-1. DNS-Eintrag anlegen: `ilo-pveX.gustini-intern.de → <iLO-IP>`
-2. In iLO Hostname setzen: Network → iLO Hostname → `ilo-pveX`
-3. Service-Account `gustini` in iLO anlegen (falls nicht per Template)
-4. In `config.env`: neuen Host zu `ILO_HOSTS` hinzufügen
-5. Erstmalig ausführen: `./ilo-cert-renew.sh --force ilo-pveX.gustini-intern.de`
+```bash
+crontab -e
+```
+```cron
+0 3 1 * * /opt/iloCertDeploy/ilo-cert-renew.sh >> /var/log/ilo-cert-renew.log 2>&1
+```
 
-## Hinweise
+### Neuen Server hinzufügen
 
-- Nach dem Cert-Import startet iLO den Webservice neu (~30 Sekunden)
-- `config.env` enthält Passwörter — nicht in git eincheckt (`.gitignore`)
-- Let's Encrypt Zertifikate laufen nach 90 Tagen ab — Renewal bei `RENEWAL_DAYS=30`
-- acme.sh legt Zertifikate ab unter `~/.acme.sh/<hostname>/`
-- Jede iLO bekommt ein eigenes Zertifikat (eigener Key, bleibt auf iLO)
+1. DNS-Eintrag anlegen: `ilo-serverX.example.com → <iLO-IP>`
+2. iLO-Hostname in iLO Network Settings setzen
+3. Service-Account in iLO anlegen
+4. Hostname in `config.env` zu `ILO_HOSTS` hinzufügen
+5. Ausführen: `./ilo-cert-renew.sh --force ilo-serverX.example.com`
+
+---
+
+## Tested on
+
+| Hardware | iLO Version | OS |
+|---|---|---|
+| HPE ProLiant DL385 Gen11 | iLO 6 (1.76) | Debian 12 (Proxmox VE 9.2) |
+
+Contributions and test reports for other hardware/iLO versions are welcome.
+
+---
+
+## License
+
+MIT
+
+---
+
+<sub>This project was developed with the assistance of [Claude Sonnet 4.6](https://www.anthropic.com/claude) (Anthropic) in an interactive session covering HPE iLO security hardening, Redfish API exploration, Let's Encrypt automation, and iterative script debugging.</sub>
